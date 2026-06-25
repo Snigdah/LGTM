@@ -1,0 +1,122 @@
+// ============================================================================
+// Grafana Alloy - VM-2 (Application Server)
+// ONE Alloy serves every Spring Boot app on this host. Apps are discovered
+// automatically from Docker, so you never edit this file when adding apps.
+//
+// An app opts in by:
+//   - joining the "observability" Docker network
+//   - listening on container port 8080
+//   - setting the label   metrics.scrape=true
+//
+// Everything is shipped to the LGTM stack on VM-1 (192.168.10.110).
+// ============================================================================
+
+// ---------- LOGS -> Loki ----------
+// Tail ONLY containers on the shared observability network (our apps + Alloy).
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "logs" {
+  targets = discovery.docker.containers.targets
+  rule {
+    source_labels = ["__meta_docker_network_name"]
+    regex         = "observability"
+    action        = "keep"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+}
+
+loki.source.docker "default" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.logs.output
+  forward_to = [loki.write.vm1.receiver]
+}
+
+loki.write "vm1" {
+  endpoint {
+    url = "http://192.168.10.110:3100/loki/api/v1/push"
+  }
+  external_labels = {
+    host = "vm2-app-server",
+  }
+}
+
+// ---------- METRICS -> Mimir ----------
+// Discover any container labeled metrics.scrape=true and scrape
+// <container-name>:8080/actuator/prometheus. The address is built from the
+// container name (Docker DNS resolves it on the shared network), so we don't
+// depend on Docker's port metadata. Duplicate meta-targets collapse to one
+// because the final label set (address/job/instance) is identical.
+discovery.relabel "app_metrics" {
+  targets = discovery.docker.containers.targets
+  rule {
+    source_labels = ["__meta_docker_container_label_metrics_scrape"]
+    regex         = "true"
+    action        = "keep"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "__address__"
+    replacement   = "$1:8080"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "job"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "instance"
+  }
+}
+
+prometheus.scrape "apps" {
+  targets         = discovery.relabel.app_metrics.output
+  metrics_path    = "/actuator/prometheus"
+  scrape_interval = "15s"
+  forward_to      = [prometheus.remote_write.vm1.receiver]
+}
+
+prometheus.remote_write "vm1" {
+  endpoint {
+    url = "http://192.168.10.110:9009/api/v1/push"
+  }
+  external_labels = {
+    cluster = "vm2",
+  }
+}
+
+// ---------- TRACES -> Tempo ----------
+otelcol.receiver.otlp "default" {
+  grpc {
+    endpoint = "0.0.0.0:4317"
+  }
+  http {
+    endpoint = "0.0.0.0:4318"
+  }
+  output {
+    traces = [otelcol.processor.batch.default.input]
+  }
+}
+
+otelcol.processor.batch "default" {
+  output {
+    traces = [otelcol.exporter.otlp.tempo.input]
+  }
+}
+
+otelcol.exporter.otlp "tempo" {
+  client {
+    endpoint = "192.168.10.110:4317"
+    tls {
+      insecure = true
+    }
+  }
+}

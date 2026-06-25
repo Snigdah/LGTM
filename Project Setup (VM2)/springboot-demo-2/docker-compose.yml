@@ -1,0 +1,21 @@
+# App 2 - payment-service. Own compose file, deploy independently.
+# Prerequisite (already created for Alloy):  docker network create observability
+services:
+  app:
+    build: .
+    image: payment-service:1.0.0
+    container_name: springboot-demo-2               # unique name
+    ports:
+      - "8381:8080"                                  # unique HOST port (internal stays 8080)
+    environment:
+      - SPRING_APPLICATION_NAME=payment-service      # trace service name shown in Tempo
+      - MANAGEMENT_OTLP_TRACING_ENDPOINT=http://alloy:4318/v1/traces
+    labels:
+      - "metrics.scrape=true"                        # Alloy auto-scrapes /actuator/prometheus
+    networks:
+      - observability
+    restart: unless-stopped
+
+networks:
+  observability:
+    external: true

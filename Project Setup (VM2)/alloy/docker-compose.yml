@@ -1,0 +1,29 @@
+# Alloy runs ONCE per VM. All Spring Boot apps share it.
+# Prerequisite (run once on the host):  docker network create observability
+services:
+  alloy:
+    image: grafana/alloy:v1.17.0
+    container_name: alloy
+    command:
+      - run
+      - /etc/alloy/config.alloy
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+    volumes:
+      - ./config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro   # to read container logs + discover apps
+      - alloy-data:/var/lib/alloy/data
+    ports:
+      - "12345:12345"        # Alloy web UI
+      - "4317:4317"          # OTLP gRPC in (apps push traces here)
+      - "4318:4318"          # OTLP HTTP in
+    networks:
+      - observability
+    restart: unless-stopped
+
+networks:
+  observability:
+    external: true           # created once with: docker network create observability
+
+volumes:
+  alloy-data:

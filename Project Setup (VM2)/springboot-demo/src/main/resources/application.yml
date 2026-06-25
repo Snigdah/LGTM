@@ -1,0 +1,64 @@
+spring:
+  application:
+    name: springboot-demo
+  cloud:
+    openfeign:
+      micrometer:
+        enabled: true
+
+server:
+  port: 8080
+
+# Base URL of App 2 (payment-service). Both run on the "observability" Docker
+# network, so Docker DNS resolves the container name. Override with PAYMENT_SERVICE_URL.
+payment:
+  service:
+    url: ${PAYMENT_SERVICE_URL:http://springboot-demo-2:8080}
+
+# ----------------------------------------------------------------------------
+# Observability
+# ----------------------------------------------------------------------------
+management:
+  endpoints:
+    web:
+      exposure:
+        # Expose health, info, the Prometheus scrape endpoint, and metrics browser
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+
+  # METRICS -> Micrometer tags every metric with the app name; Prometheus endpoint on
+  metrics:
+    tags:
+      application: ${spring.application.name}
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+
+  # TRACES -> sample everything (dev), export spans via OTLP to Alloy (-> Tempo)
+  tracing:
+    sampling:
+      probability: 1.0
+#    propagation:
+#      type: W3C
+  otlp:
+    tracing:
+      # Alloy's OTLP/HTTP receiver. Overridable with MANAGEMENT_OTLP_TRACING_ENDPOINT.
+      endpoint: http://alloy:4318/v1/traces
+
+# ----------------------------------------------------------------------------
+# Logging -> structured JSON on the console (stdout), which Alloy ships to Loki.
+# Spring Boot's built-in "logstash" format includes MDC, so the active
+# traceId / spanId appear as JSON fields and Grafana can link logs <-> traces.
+# ----------------------------------------------------------------------------
+logging:
+  structured:
+    format:
+      console: logstash
+  level:
+    root: INFO
+    com.example.demo: DEBUG
